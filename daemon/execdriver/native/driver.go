@@ -407,14 +407,15 @@ func (d *driver) execRestore(checkpoint *execdriver.Checkpoint, startCallback ex
 		}
 	}()
 
-	if err := c.ProcessConfig.Run(); err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.Sys().(syscall.WaitStatus).ExitStatus(), err
-		} else {
-			return -1, err
-		}
+	if err := c.ProcessConfig.Start(); err != nil {
+		return -1, err
 	}
 	log.Warnf("criu pid = %d", c.ProcessConfig.Process.Pid)
+
+	var waitStatus syscall.WaitStatus
+	if _, err := syscall.Wait4(c.ProcessConfig.Process.Pid, &waitStatus, 0, nil); err != nil {
+		return waitStatus.ExitStatus(), err
+	}
 
 	// TODO there's possibly more than one network configs
 	if err := network.SetInterfaceMaster(vethName, "docker0"); err != nil {
