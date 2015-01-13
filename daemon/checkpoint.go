@@ -17,7 +17,7 @@ type ContainerCheckpoint struct {
 }
 
 func (cp *ContainerCheckpoint) imagePath() string {
-	return filepath.Join(cp.container.RootfsPath(), "checkpoint", cp.ID)
+	return filepath.Join(cp.container.root, "checkpoints", cp.ID)
 }
 
 func (cp *ContainerCheckpoint) execdriverCheckpoint() *execdriver.Checkpoint {
