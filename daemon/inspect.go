@@ -64,11 +64,11 @@ func (daemon *Daemon) ContainerInspect(job *engine.Job) engine.Status {
 		// Make checkpoint list with ordering by creation time
 		for _, checkpoint := range container.Checkpoints {
 			checkpoints = append(checkpoints, checkpoint)
-			for i := len(checkpoints)-1; i >= 0; i-- {
-				if checkpoints[i].CreatedAt.Before(checkpoint.CreatedAt) {
+			for i := len(checkpoints)-1; i > 0; i-- {
+				if checkpoints[i-1].CreatedAt.Before(checkpoint.CreatedAt) {
 					break
 				}
-				checkpoints[i+1], checkpoints[i] = checkpoints[i], checkpoint
+				checkpoints[i], checkpoints[i-1] = checkpoints[i-1], checkpoint
 			}
 		}
 		out.SetJson("Checkpoints", checkpoints)
