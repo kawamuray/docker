@@ -326,9 +326,6 @@ func populateCommand(c *Container, env []string) error {
 }
 
 func (container *Container) spawn(runner ContainerRunner, networkAllocator func() error) (err error) {
-	container.Lock()
-	defer container.Unlock()
-
 	if container.Running {
 		return nil
 	}
@@ -382,6 +379,8 @@ func (container *Container) spawn(runner ContainerRunner, networkAllocator func(
 }
 
 func (container *Container) Start() (err error) {
+	container.Lock()
+	defer container.Unlock()
 	return container.spawn(container.daemon.Run, container.AllocateNetwork)
 }
 
@@ -841,8 +840,6 @@ func (container *Container) Restore(checkpointID string) error {
 	}
 
 	container.NetworkSettings = checkpoint.NetworkSettings
-	// TODO is this correct?
-	container.Unlock()
 
 	runner := func(_ *Container, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
 		return container.daemon.execDriver.Restore(checkpoint.execdriverCheckpoint(), pipes, startCallback)
