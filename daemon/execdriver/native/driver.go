@@ -71,7 +71,7 @@ type execOutput struct {
 
 type execCallback func(container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error)
 
-func (d *driver) exec(c *execdriver.Command, pipes *execdriver.Pipes, startCallback execdriver.StartCallback, container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
+func (d *driver) exec(c *execdriver.Command, startCallback execdriver.StartCallback, container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
 	return namespaces.Exec(container, c.ProcessConfig.Stdin, c.ProcessConfig.Stdout, c.ProcessConfig.Stderr, c.ProcessConfig.Console, dataPath, args, func(container *libcontainer.Config, console, dataPath, init string, child *os.File, args []string) *exec.Cmd {
 		c.ProcessConfig.Path = d.initPath
 		c.ProcessConfig.Args = append([]string{
@@ -157,6 +157,7 @@ func (d *driver) run(c *execdriver.Command, pipes *execdriver.Pipes, executer ex
 	}
 
 	oomKill := false
+	// TODO have to create and save state manually when restoring
 	state, err := libcontainer.GetState(filepath.Join(d.root, c.ID))
 	if err == nil {
 		oomKillNotification, err := libcontainer.NotifyOnOOM(state)
@@ -177,7 +178,7 @@ func (d *driver) run(c *execdriver.Command, pipes *execdriver.Pipes, executer ex
 
 func (d *driver) Run(c *execdriver.Command, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
 	return d.run(c, pipes, func(container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
-		return d.exec(c, pipes, startCallback, container, dataPath, args, waitForStart)
+		return d.exec(c, startCallback, container, dataPath, args, waitForStart)
 	})
 }
 
@@ -328,7 +329,7 @@ func (d *driver) Checkpoint(checkpoint *execdriver.Checkpoint, stop bool) error 
 	return nil
 }
 
-func (d *driver) execRestore(checkpoint *execdriver.Checkpoint, pipes *execdriver.Pipes, startCallback execdriver.StartCallback, container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
+func (d *driver) execRestore(checkpoint *execdriver.Checkpoint, startCallback execdriver.StartCallback, container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
 	c := checkpoint.Command
 
 	pidFile := filepath.Join(checkpoint.ImagePath, "restore.pid")
@@ -443,7 +444,7 @@ func (d *driver) execRestore(checkpoint *execdriver.Checkpoint, pipes *execdrive
 
 func (d *driver) Restore(checkpoint *execdriver.Checkpoint, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
 	return d.run(checkpoint.Command, pipes, func(container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
-		return d.execRestore(checkpoint, pipes, startCallback, container, dataPath, args, waitForStart)
+		return d.execRestore(checkpoint, startCallback, container, dataPath, args, waitForStart)
 	})
 }
 
