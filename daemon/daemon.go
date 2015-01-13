@@ -135,6 +135,8 @@ func (daemon *Daemon) Install(eng *engine.Engine) error {
 		"execStart":         daemon.ContainerExecStart,
 		"execResize":        daemon.ContainerExecResize,
 		"execInspect":       daemon.ContainerExecInspect,
+		"checkpoint":        daemon.ContainerCheckpoint,
+		"restore":           daemon.ContainerRestore,
 	} {
 		if err := eng.Register(name, method); err != nil {
 			return err
@@ -649,6 +651,7 @@ func (daemon *Daemon) newContainer(name string, config *runconfig.Config, imgID 
 		ExecDriver:      daemon.execDriver.Name(),
 		State:           NewState(),
 		execCommands:    newExecStore(),
+		Checkpoints:     make(map[string]*ContainerCheckpoint),
 	}
 	container.root = daemon.containerRoot(container.ID)
 	return container, err
@@ -1091,6 +1094,10 @@ func (daemon *Daemon) Unpause(c *Container) error {
 
 func (daemon *Daemon) Kill(c *Container, sig int) error {
 	return daemon.execDriver.Kill(c.command, sig)
+}
+
+func (daemon *Daemon) Checkpoint(checkpoint *ContainerCheckpoint, stop bool) error {
+	return daemon.execDriver.Checkpoint(checkpoint.execdriverCheckpoint(), stop)
 }
 
 // Nuke kills all containers then removes all content

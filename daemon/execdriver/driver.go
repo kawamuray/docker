@@ -61,6 +61,8 @@ type Driver interface {
 	GetPidsForContainer(id string) ([]int, error) // Returns a list of pids for the given container.
 	Terminate(c *Command) error                   // kill it with fire
 	Clean(id string) error                        // clean all traces of container exec
+	Checkpoint(checkpoint *Checkpoint, stop bool) error
+	Restore(checkpoint *Checkpoint, pipes *Pipes, startCallback StartCallback) (ExitStatus, error)
 }
 
 // Network settings of the container
@@ -145,4 +147,11 @@ type Command struct {
 	MountLabel         string            `json:"mount_label"`
 	LxcConfig          []string          `json:"lxc_config"`
 	AppArmorProfile    string            `json:"apparmor_profile"`
+}
+
+// Checkpoint context
+type Checkpoint struct {
+	Command   *Command
+	ImagePath string
+	Volumes   map[string]string
 }

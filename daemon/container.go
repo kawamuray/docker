@@ -50,6 +50,8 @@ type StreamConfig struct {
 	stdinPipe io.WriteCloser
 }
 
+type ContainerRunner func(c *Container, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error)
+
 type Container struct {
 	*State `json:"State"` // Needed for remote api version <= 1.11
 	root   string         // Path to the "home" of the container, including metadata.
@@ -95,6 +97,8 @@ type Container struct {
 	activeLinks  map[string]*links.Link
 	monitor      *containerMonitor
 	execCommands *execStore
+
+	Checkpoints  map[string]*ContainerCheckpoint
 }
 
 func (container *Container) FromDisk() error {
@@ -315,7 +319,7 @@ func populateCommand(c *Container, env []string) error {
 	return nil
 }
 
-func (container *Container) Start() (err error) {
+func (container *Container) spawn(runner ContainerRunner, networkAllocator func() error) (err error) {
 	container.Lock()
 	defer container.Unlock()
 
@@ -343,7 +347,7 @@ func (container *Container) Start() (err error) {
 	if err := container.Mount(); err != nil {
 		return err
 	}
-	if err := container.initializeNetworking(); err != nil {
+	if err := container.initializeNetworking(networkAllocator); err != nil {
 		return err
 	}
 	if err := container.updateParentsHosts(); err != nil {
@@ -368,7 +372,11 @@ func (container *Container) Start() (err error) {
 		return err
 	}
 
-	return container.waitForStart()
+	return container.waitForStart(runner)
+}
+
+func (container *Container) Start() (err error) {
+	return container.spawn(container.daemon.Run, container.AllocateNetwork)
 }
 
 func (container *Container) Run() error {
@@ -780,6 +788,62 @@ func (container *Container) Export() (archive.Archive, error) {
 		nil
 }
 
+func (container *Container) Checkpoint(stop bool) error {
+	log.Debugf("Checkpointing %s", container.ID)
+	container.Lock()
+	defer container.Unlock()
+
+	if !container.Running {
+		return fmt.Errorf("Container %s is not running.", container.ID)
+	}
+
+	checkpoint := &ContainerCheckpoint{
+		ID:              utils.GenerateRandomID(),
+		NetworkSettings: container.NetworkSettings,
+		CreatedAt:       time.Now().UTC(),
+		container:       container,
+	}
+
+	imagePath := checkpoint.imagePath()
+	os.RemoveAll(imagePath)
+	if err := os.MkdirAll(imagePath, 0755); err != nil {
+		return err
+	}
+
+	if err := container.daemon.Checkpoint(checkpoint, stop); err != nil {
+		return err
+	}
+
+	log.Debugf("checkpoint = %s", checkpoint)
+	container.Checkpoints[checkpoint.ID] = checkpoint
+
+	return nil
+}
+
+func (container *Container) Restore(checkpointID string) error {
+	log.Debugf("Restoring %s", container.ID)
+	container.Lock()
+	defer container.Unlock()
+
+	if container.Running {
+		return fmt.Errorf("Container %s already running.", container.ID)
+	}
+
+	checkpoint := container.Checkpoints[checkpointID]
+	if checkpoint == nil {
+		return fmt.Errorf("No such checkpoint %s for container %s", checkpointID, container.ID)
+	}
+
+	container.NetworkSettings = checkpoint.NetworkSettings
+	// TODO is this correct?
+	container.Unlock()
+
+	runner := func(_ *Container, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
+		return container.daemon.execDriver.Restore(checkpoint.execdriverCheckpoint(), pipes, startCallback)
+	}
+	return container.spawn(runner, container.RestoreNetwork)
+}
+
 func (container *Container) Mount() error {
 	return container.daemon.Mount(container)
 }
@@ -1126,7 +1190,7 @@ func (container *Container) updateParentsHosts() error {
 	return nil
 }
 
-func (container *Container) initializeNetworking() error {
+func (container *Container) initializeNetworking(allocator func() error) error {
 	var err error
 	if container.hostConfig.NetworkMode.IsHost() {
 		container.Config.Hostname, err = os.Hostname()
@@ -1175,7 +1239,7 @@ func (container *Container) initializeNetworking() error {
 		container.Config.NetworkDisabled = true
 		return container.buildHostnameAndHostsFiles("127.0.1.1")
 	}
-	if err := container.AllocateNetwork(); err != nil {
+	if err := allocator(); err != nil {
 		return err
 	}
 	return container.buildHostnameAndHostsFiles(container.NetworkSettings.IPAddress)
@@ -1321,14 +1385,14 @@ func (container *Container) startLoggingToDisk() error {
 	return nil
 }
 
-func (container *Container) waitForStart() error {
+func (container *Container) waitForStart(runner ContainerRunner) error {
 	container.monitor = newContainerMonitor(container, container.hostConfig.RestartPolicy)
 
 	// block until we either receive an error from the initial start of the container's
 	// process or until the process is running in the container
 	select {
 	case <-container.monitor.startSignal:
-	case err := <-promise.Go(container.monitor.Start):
+	case err := <-promise.Go(func() error { return container.monitor.Start(runner) }):
 		return err
 	}
 

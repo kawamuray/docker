@@ -237,6 +237,14 @@ func (d *driver) Terminate(c *execdriver.Command) error {
 	return KillLxc(c.ID, 9)
 }
 
+func (d *driver) Checkpoint(_ *execdriver.Checkpoint, _ bool) error {
+	return fmt.Errorf("NOT SUPPORTED")
+}
+
+func (d *driver) Restore(_ *execdriver.Checkpoint, _ *execdriver.Pipes, _ execdriver.StartCallback) (execdriver.ExitStatus, error) {
+	return execdriver.ExitStatus{ExitCode: -1, OOMKilled: false}, fmt.Errorf("NOT SUPPORTED")
+}
+
 func (d *driver) version() string {
 	var (
 		version string

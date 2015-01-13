@@ -98,7 +98,7 @@ func (m *containerMonitor) Close() error {
 }
 
 // Start starts the containers process and monitors it according to the restart policy
-func (m *containerMonitor) Start() error {
+func (m *containerMonitor) Start(runner ContainerRunner) error {
 	var (
 		err        error
 		exitStatus execdriver.ExitStatus
@@ -135,8 +135,11 @@ func (m *containerMonitor) Start() error {
 
 		m.lastStartTime = time.Now()
 
-		if exitStatus, err = m.container.daemon.Run(m.container, pipes, m.callback); err != nil {
-			// if we receive an internal error from the initial start of a container then lets
+
+		exitStatus, err = runner(m.container, pipes, m.callback)
+		log.Warnf("exitStatus = %d, err = %s", exitStatus, err)
+		if err != nil {
+			// if we receive an internal error from the initial start of a container then letsr
 			// return it instead of entering the restart loop
 			if m.container.RestartCount == 0 {
 				m.container.ExitCode = -1
@@ -148,6 +151,7 @@ func (m *containerMonitor) Start() error {
 			log.Errorf("Error running container: %s", err)
 		}
 
+		log.Warnf("afterRun = true")
 		// here container.Lock is already lost
 		afterRun = true
 
@@ -178,7 +182,9 @@ func (m *containerMonitor) Start() error {
 			m.container.LogEvent("oom")
 		}
 		m.container.LogEvent("die")
+		log.Warnf("resetContainer")
 		m.resetContainer(true)
+		log.Warnf("End of monitor err = %s", err)
 		return err
 	}
 }

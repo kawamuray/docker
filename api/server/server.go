@@ -1202,6 +1202,33 @@ func postContainerExecResize(eng *engine.Engine, version version.Version, w http
 	return nil
 }
 
+func postContainersCheckpoint(eng *engine.Engine, version version.Version, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+	if vars == nil {
+		return fmt.Errorf("Missing parameter")
+	}
+	if err := parseForm(r); err != nil {
+		return err
+	}
+	job := eng.Job("checkpoint", vars["name"], r.Form.Get("stop"))
+	if err := job.Run(); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func postContainersRestore(eng *engine.Engine, version version.Version, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+	if vars == nil {
+		return fmt.Errorf("Missing parameter")
+	}
+	job := eng.Job("restore", vars["name"])
+	if err := job.Run(); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
 func optionsHandler(eng *engine.Engine, version version.Version, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	w.WriteHeader(http.StatusOK)
 	return nil
@@ -1330,6 +1357,8 @@ func createRouter(eng *engine.Engine, logging, enableCors bool, dockerVersion st
 			"/exec/{name:.*}/start":         postContainerExecStart,
 			"/exec/{name:.*}/resize":        postContainerExecResize,
 			"/containers/{name:.*}/rename":  postContainerRename,
+			"/containers/{name:.*}/checkpoint": postContainersCheckpoint,
+			"/containers/{name:.*}/restore":    postContainersRestore,
 		},
 		"DELETE": {
 			"/containers/{name:.*}": deleteContainers,

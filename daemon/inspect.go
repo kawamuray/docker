@@ -60,6 +60,19 @@ func (daemon *Daemon) ContainerInspect(job *engine.Job) engine.Status {
 
 		out.SetJson("HostConfig", container.hostConfig)
 
+		checkpoints := make([]*ContainerCheckpoint, 0, len(container.Checkpoints))
+		// Make checkpoint list with ordering by creation time
+		for _, checkpoint := range container.Checkpoints {
+			checkpoints = append(checkpoints, checkpoint)
+			for i := len(checkpoints)-1; i >= 0; i-- {
+				if checkpoints[i].CreatedAt.Before(checkpoint.CreatedAt) {
+					break
+				}
+				checkpoints[i+1], checkpoints[i] = checkpoints[i], checkpoint
+			}
+		}
+		out.SetJson("Checkpoints", checkpoints)
+
 		container.hostConfig.Links = nil
 		if _, err := out.WriteTo(job.Stdout); err != nil {
 			return job.Error(err)

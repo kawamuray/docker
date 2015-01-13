@@ -2607,3 +2607,53 @@ func (cli *DockerCli) CmdExec(args ...string) error {
 
 	return nil
 }
+
+func (cli *DockerCli) CmdCheckpoint(args ...string) error {
+	cmd := cli.Subcmd("checkpoint", "CONTAINER", "Checkpoint a container", true)
+	stop := cmd.Bool([]string{"s", "-stop"}, false, "Stop a container after checkpointed")
+
+	if err := cmd.Parse(args); err != nil {
+		return err
+	}
+
+	if cmd.NArg() != 1 {
+		cmd.Usage()
+		return nil
+	}
+
+	name := cmd.Args()[0]
+	v := url.Values{}
+	if stop != nil && *stop {
+		v.Set("stop", "1")
+	}
+
+	_, _, err := readBody(cli.call("POST", fmt.Sprintf("/containers/%s/checkpoint?%s", name, v.Encode()), nil, false))
+	if err != nil {
+		fmt.Fprintf(cli.err, "%s\n", err)
+		return fmt.Errorf("Error: failed to checkpoint container named %s: %s", name, err)
+	}
+	fmt.Fprintf(cli.out, "%s\n", name)
+	return nil
+}
+
+func (cli *DockerCli) CmdRestore(args ...string) error {
+	cmd := cli.Subcmd("restore", "CONTAINER", "Restore a container", true)
+
+	if err := cmd.Parse(args); err != nil {
+		return err
+	}
+
+	if cmd.NArg() != 1 {
+		cmd.Usage()
+		return nil
+	}
+
+	name := cmd.Args()[0]
+	_, _, err := readBody(cli.call("POST", fmt.Sprintf("/containers/%s/restore?%s", name), nil, false))
+	if err != nil {
+		fmt.Fprintf(cli.err, "%s\n", err)
+		return fmt.Errorf("Error: failed to restore container named %s", name)
+	}
+	fmt.Fprintf(cli.out, "%s\n", name)
+	return nil
+}

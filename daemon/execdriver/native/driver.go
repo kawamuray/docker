@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"strconv"
 	"sync"
 	"syscall"
 
@@ -25,6 +26,8 @@ import (
 	"github.com/docker/libcontainer/namespaces"
 	_ "github.com/docker/libcontainer/namespaces/nsenter"
 	"github.com/docker/libcontainer/system"
+	"github.com/docker/libcontainer/utils"
+	"github.com/docker/libcontainer/network"
 )
 
 const (
@@ -66,7 +69,39 @@ type execOutput struct {
 	err      error
 }
 
-func (d *driver) Run(c *execdriver.Command, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
+type execCallback func(container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error)
+
+func (d *driver) exec(c *execdriver.Command, pipes *execdriver.Pipes, startCallback execdriver.StartCallback, container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
+	return namespaces.Exec(container, c.ProcessConfig.Stdin, c.ProcessConfig.Stdout, c.ProcessConfig.Stderr, c.ProcessConfig.Console, dataPath, args, func(container *libcontainer.Config, console, dataPath, init string, child *os.File, args []string) *exec.Cmd {
+		c.ProcessConfig.Path = d.initPath
+		c.ProcessConfig.Args = append([]string{
+			DriverName,
+			"-console", console,
+			"-pipe", "3",
+			"-root", filepath.Join(d.root, c.ID),
+			"--",
+		}, args...)
+
+		// set this to nil so that when we set the clone flags anything else is reset
+		c.ProcessConfig.SysProcAttr = &syscall.SysProcAttr{
+			Cloneflags: uintptr(namespaces.GetNamespaceFlags(container.Namespaces)),
+		}
+		c.ProcessConfig.ExtraFiles = []*os.File{child}
+
+		c.ProcessConfig.Env = container.Env
+		c.ProcessConfig.Dir = container.RootFs
+
+		return &c.ProcessConfig.Cmd
+	}, func() {
+		close(waitForStart)
+		if startCallback != nil {
+			c.ContainerPid = c.ProcessConfig.Process.Pid
+			startCallback(&c.ProcessConfig, c.ContainerPid)
+		}
+	})
+}
+
+func (d *driver) run(c *execdriver.Command, pipes *execdriver.Pipes, executer execCallback) (execdriver.ExitStatus, error) {
 	// take the Command and populate the libcontainer.Config from it
 	container, err := d.createContainer(c)
 	if err != nil {
@@ -110,33 +145,7 @@ func (d *driver) Run(c *execdriver.Command, pipes *execdriver.Pipes, startCallba
 	waitForStart := make(chan struct{})
 
 	go func() {
-		exitCode, err := namespaces.Exec(container, c.ProcessConfig.Stdin, c.ProcessConfig.Stdout, c.ProcessConfig.Stderr, c.ProcessConfig.Console, dataPath, args, func(container *libcontainer.Config, console, dataPath, init string, child *os.File, args []string) *exec.Cmd {
-			c.ProcessConfig.Path = d.initPath
-			c.ProcessConfig.Args = append([]string{
-				DriverName,
-				"-console", console,
-				"-pipe", "3",
-				"-root", filepath.Join(d.root, c.ID),
-				"--",
-			}, args...)
-
-			// set this to nil so that when we set the clone flags anything else is reset
-			c.ProcessConfig.SysProcAttr = &syscall.SysProcAttr{
-				Cloneflags: uintptr(namespaces.GetNamespaceFlags(container.Namespaces)),
-			}
-			c.ProcessConfig.ExtraFiles = []*os.File{child}
-
-			c.ProcessConfig.Env = container.Env
-			c.ProcessConfig.Dir = container.RootFs
-
-			return &c.ProcessConfig.Cmd
-		}, func() {
-			close(waitForStart)
-			if startCallback != nil {
-				c.ContainerPid = c.ProcessConfig.Process.Pid
-				startCallback(&c.ProcessConfig, c.ContainerPid)
-			}
-		})
+		exitCode, err := executer(container, dataPath, args, waitForStart)
 		execOutputChan <- execOutput{exitCode, err}
 	}()
 
@@ -161,8 +170,15 @@ func (d *driver) Run(c *execdriver.Command, pipes *execdriver.Pipes, startCallba
 	}
 	// wait for the container to exit.
 	execOutput := <-execOutputChan
+	log.Warnf("execOutput = %s", execOutput)
 
 	return execdriver.ExitStatus{ExitCode: execOutput.exitCode, OOMKilled: oomKill}, execOutput.err
+}
+
+func (d *driver) Run(c *execdriver.Command, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
+	return d.run(c, pipes, func(container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
+		return d.exec(c, pipes, startCallback, container, dataPath, args, waitForStart)
+	})
 }
 
 func (d *driver) Kill(p *execdriver.Command, sig int) error {
@@ -278,6 +294,159 @@ func (d *driver) createContainerRoot(id string) error {
 func (d *driver) Clean(id string) error {
 	return os.RemoveAll(filepath.Join(d.root, id))
 }
+
+func (d *driver) Checkpoint(checkpoint *execdriver.Checkpoint, stop bool) error {
+	c := checkpoint.Command
+
+	if d.activeContainers[c.ID] == nil {
+		return fmt.Errorf("active container for %s does not exist", c.ID)
+	}
+
+	cmdArgs := []string{
+		"dump",
+		"-v4",
+		"-o", "/dev/stdout",
+		"--manage-cgroups",
+		"--evasive-devices",
+		"--ext-mount-map", "/etc/resolv.conf:/etc/resolv.conf",
+		"--ext-mount-map", "/etc/hosts:/etc/hosts",
+		"--ext-mount-map", "/etc/hostname:/etc/hostname",
+		"--ext-mount-map", "/.dockerinit:/.dockerinit",
+		"-D", checkpoint.ImagePath,
+		"-t", fmt.Sprintf("%d", c.ContainerPid),
+		"--root", c.Rootfs,
+	}
+	for hostPath, guestPath := range checkpoint.Volumes {
+		cmdArgs = append(cmdArgs, "--ext-mount-map", hostPath+":"+guestPath)
+	}
+	output, err := exec.Command("criu", cmdArgs...).CombinedOutput()
+	log.Warnf("Rootfs = %s", c.Rootfs)
+
+	if err != nil {
+		return fmt.Errorf("failed checkpointing container %s: %s; %s", c.ID, err, string(output))
+	}
+	return nil
+}
+
+func (d *driver) execRestore(checkpoint *execdriver.Checkpoint, pipes *execdriver.Pipes, startCallback execdriver.StartCallback, container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
+	c := checkpoint.Command
+
+	pidFile := filepath.Join(checkpoint.ImagePath, "restore.pid")
+	defer os.Remove(pidFile)
+
+	vethName, _ := utils.GenerateRandomName("veth", 7)
+
+	c.ProcessConfig.Path = "/usr/local/sbin/criu"
+	c.ProcessConfig.Args = []string{
+		"criu", "restore", "-v4",
+		"-o", "/tmp/restore.log",
+		"--restore-detached",
+		"--restore-sibling",
+		"--manage-cgroups",
+		"--evasive-devices",
+		"--ext-mount-map", fmt.Sprintf("/etc/resolv.conf:/var/lib/docker/containers/%s/resolv.conf", c.ID),
+		"--ext-mount-map", fmt.Sprintf("/etc/hosts:/var/lib/docker/containers/%s/hosts", c.ID),
+		"--ext-mount-map", fmt.Sprintf("/etc/hostname:/var/lib/docker/containers/%s/hostname", c.ID),
+		"--ext-mount-map", "/.dockerinit:/var/lib/docker/init/dockerinit-1.0.1",
+		"--veth-pair", fmt.Sprintf("eth0=%s", vethName),
+		"--pidfile", pidFile,
+		"-D", checkpoint.ImagePath,
+		"--root", c.Rootfs,
+	}
+	// TODO take care of volumes
+	if pipe, _ := c.ProcessConfig.StdinPipe(); pipe != nil {
+		stat, _ := pipe.(*os.File).Stat()
+		c.ProcessConfig.Args = append(c.ProcessConfig.Args, "--inherit-fd",
+			fmt.Sprintf("fd[0]:pipe:[%d]", stat.Sys().(*syscall.Stat_t).Ino))
+	}
+	if pipe, _ := c.ProcessConfig.StdoutPipe(); pipe != nil {
+		stat, _ := pipe.(*os.File).Stat()
+		c.ProcessConfig.Args = append(c.ProcessConfig.Args, "--inherit-fd",
+			fmt.Sprintf("fd[1]:pipe:[%d]", stat.Sys().(*syscall.Stat_t).Ino))
+	}
+	if pipe, _ := c.ProcessConfig.StderrPipe(); pipe != nil {
+		stat, _ := pipe.(*os.File).Stat()
+		c.ProcessConfig.Args = append(c.ProcessConfig.Args, "--inherit-fd",
+			fmt.Sprintf("fd[2]:pipe:[%d]", stat.Sys().(*syscall.Stat_t).Ino))
+	}
+
+	// c.ProcessConfig.ExtraFiles = []*os.File{child}
+	c.ProcessConfig.Env = container.Env
+	c.ProcessConfig.Dir = container.RootFs
+
+	defer func() {
+		for _, subsys := range []string{
+			"devices",
+			"memory",
+			"cpu",
+			"cpuset",
+			"cpuacct",
+			"blkio",
+			"perf_event",
+			"freezer",
+		} {
+			path := fmt.Sprintf("/sys/fs/cgroup/%s/docker/%s", subsys, c.ID)
+			if _, err := os.Stat(path); err == nil {
+				os.Remove(path)
+			}
+		}
+	}()
+
+	if err := c.ProcessConfig.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.Sys().(syscall.WaitStatus).ExitStatus(), err
+		} else {
+			return -1, err
+		}
+	}
+	log.Warnf("criu pid = %d", c.ProcessConfig.Process.Pid)
+
+	// TODO there's possibly more than one network configs
+	if err := network.SetInterfaceMaster(vethName, "docker0"); err != nil {
+		return -1, err
+	}
+	if err := network.InterfaceUp(vethName); err != nil {
+		return -1, err
+	}
+
+	close(waitForStart)
+	sPid, err := ioutil.ReadFile(pidFile)
+	if err != nil {
+		return -1, err
+	}
+
+	pid, _ := strconv.Atoi(string(sPid))
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return -1, err
+	}
+
+	c.ProcessConfig.Process = proc
+	if startCallback != nil {
+		c.ContainerPid = pid
+		startCallback(&c.ProcessConfig, c.ContainerPid)
+	}
+
+	log.Warnf("PROC = %s", proc)
+	pState, err := proc.Wait()
+	if err != nil {
+		if _, ok := err.(*exec.ExitError); !ok {
+			return -1, err
+		}
+	}
+
+	log.Warnf("pState = %s", pState)
+	exitCode := pState.Sys().(syscall.WaitStatus).ExitStatus()
+	log.Warnf("exitCode = %d", exitCode)
+	return exitCode, nil
+}
+
+func (d *driver) Restore(checkpoint *execdriver.Checkpoint, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
+	return d.run(checkpoint.Command, pipes, func(container *libcontainer.Config, dataPath string, args []string, waitForStart chan struct{}) (int, error) {
+		return d.execRestore(checkpoint, pipes, startCallback, container, dataPath, args, waitForStart)
+	})
+}
+
 
 func getEnv(key string, env []string) string {
 	for _, pair := range env {
