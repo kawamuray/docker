@@ -1221,7 +1221,7 @@ func postContainersRestore(eng *engine.Engine, version version.Version, w http.R
 	if vars == nil {
 		return fmt.Errorf("Missing parameter")
 	}
-	job := eng.Job("restore", vars["name"])
+	job := eng.Job("restore", vars["name"], vars["checkpointID"])
 	if err := job.Run(); err != nil {
 		return err
 	}
@@ -1358,7 +1358,7 @@ func createRouter(eng *engine.Engine, logging, enableCors bool, dockerVersion st
 			"/exec/{name:.*}/resize":        postContainerExecResize,
 			"/containers/{name:.*}/rename":  postContainerRename,
 			"/containers/{name:.*}/checkpoint": postContainersCheckpoint,
-			"/containers/{name:.*}/restore":    postContainersRestore,
+			"/containers/{name:.*}/restore/{checkpointID:.*}":    postContainersRestore,
 		},
 		"DELETE": {
 			"/containers/{name:.*}": deleteContainers,

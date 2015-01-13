@@ -2637,19 +2637,21 @@ func (cli *DockerCli) CmdCheckpoint(args ...string) error {
 }
 
 func (cli *DockerCli) CmdRestore(args ...string) error {
-	cmd := cli.Subcmd("restore", "CONTAINER", "Restore a container", true)
+	cmd := cli.Subcmd("restore", "CONTAINER CHECKPOINT_ID", "Restore a container", true)
 
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
 
-	if cmd.NArg() != 1 {
+	if cmd.NArg() != 2 {
 		cmd.Usage()
 		return nil
 	}
 
-	name := cmd.Args()[0]
-	_, _, err := readBody(cli.call("POST", fmt.Sprintf("/containers/%s/restore?%s", name), nil, false))
+	cmdArgs := cmd.Args()
+	name := cmdArgs[0]
+	checkpointID := cmdArgs[1]
+	_, _, err := readBody(cli.call("POST", fmt.Sprintf("/containers/%s/restore/%s", name, checkpointID), nil, false))
 	if err != nil {
 		fmt.Fprintf(cli.err, "%s\n", err)
 		return fmt.Errorf("Error: failed to restore container named %s", name)
