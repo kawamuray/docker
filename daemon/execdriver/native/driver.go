@@ -303,6 +303,24 @@ func (d *driver) Checkpoint(checkpoint *execdriver.Checkpoint, stop bool) error 
 		return fmt.Errorf("active container for %s does not exist", c.ID)
 	}
 
+	pipesMap := make(map[string]string)
+	for i := 0; i < 3; i++ {
+		path, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", c.ContainerPid, i))
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(path, "pipe:") {
+			pipesMap[fmt.Sprintf("%d", i)] = path
+		}
+	}
+	data, err := json.Marshal(pipesMap)
+	if err != nil {
+		return err
+	}
+	if err := ioutil.WriteFile(filepath.Join(checkpoint.ImagePath, "pipesfd.json"), data, 0644); err != nil {
+		return err
+	}
+
 	cmdArgs := []string{
 		"dump",
 		"-v4",
@@ -355,21 +373,17 @@ func (d *driver) execRestore(checkpoint *execdriver.Checkpoint, startCallback ex
 		"--root", c.Rootfs,
 	}
 	// TODO take care of volumes
-	if pipe, _ := c.ProcessConfig.StdinPipe(); pipe != nil {
-		stat, _ := pipe.(*os.File).Stat()
-		c.ProcessConfig.Args = append(c.ProcessConfig.Args, "--inherit-fd",
-			fmt.Sprintf("fd[0]:pipe:[%d]", stat.Sys().(*syscall.Stat_t).Ino))
+
+	data, err := ioutil.ReadFile(filepath.Join(checkpoint.ImagePath, "pipesfd.json"))
+	var pipesMap map[string]string
+	if err := json.Unmarshal(data, &pipesMap); err != nil {
+		return -1, err
 	}
-	if pipe, _ := c.ProcessConfig.StdoutPipe(); pipe != nil {
-		stat, _ := pipe.(*os.File).Stat()
-		c.ProcessConfig.Args = append(c.ProcessConfig.Args, "--inherit-fd",
-			fmt.Sprintf("fd[1]:pipe:[%d]", stat.Sys().(*syscall.Stat_t).Ino))
+	for fd, pipe := range pipesMap {
+		c.ProcessConfig.Args = append(c.ProcessConfig.Args,
+			"--inherit-fd", fmt.Sprintf("fd[%s]:%s", fd, pipe))
 	}
-	if pipe, _ := c.ProcessConfig.StderrPipe(); pipe != nil {
-		stat, _ := pipe.(*os.File).Stat()
-		c.ProcessConfig.Args = append(c.ProcessConfig.Args, "--inherit-fd",
-			fmt.Sprintf("fd[2]:pipe:[%d]", stat.Sys().(*syscall.Stat_t).Ino))
-	}
+	log.Warnf("%s", c.ProcessConfig.Args)
 
 	// c.ProcessConfig.ExtraFiles = []*os.File{child}
 	c.ProcessConfig.Env = container.Env
