@@ -124,6 +124,12 @@ func (container *Container) FromDisk() error {
 	if err := label.ReserveLabel(container.ProcessLabel); err != nil {
 		return err
 	}
+
+	// To avoid cyclic reference serialization
+	for _, checkpoint := range container.Checkpoints {
+		checkpoint.container = container
+	}
+
 	return container.readHostConfig()
 }
 
