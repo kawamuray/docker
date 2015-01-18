@@ -1227,11 +1227,17 @@ func postContainersRestore(eng *engine.Engine, version version.Version, w http.R
 
 	job := eng.Job("restore", vars["name"], vars["checkpointID"])
 	job.SetenvBool("clone", r.Form.Get("clone") == "1")
+
+	stdoutBuffer := bytes.NewBuffer(nil)
+	job.Stdout.Add(stdoutBuffer)
+
 	if err := job.Run(); err != nil {
 		return err
 	}
-	w.WriteHeader(http.StatusNoContent)
-	return nil
+
+	var out engine.Env
+	out.Set("Id", engine.Tail(stdoutBuffer, 1))
+	return writeJSON(w, http.StatusOK, out)
 }
 
 func optionsHandler(eng *engine.Engine, version version.Version, w http.ResponseWriter, r *http.Request, vars map[string]string) error {

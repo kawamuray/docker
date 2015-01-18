@@ -177,5 +177,7 @@ func (daemon *Daemon) ContainerRestore(job *engine.Job) engine.Status {
 		return job.Errorf("Cannot restore container %s: %s", name, err)
 	}
 	container.LogEvent("restore")
+	job.Printf("%s\n", container.ID)
+
 	return engine.StatusOK
 }

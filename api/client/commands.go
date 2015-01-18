@@ -2663,6 +2663,11 @@ func (cli *DockerCli) CmdRestore(args ...string) error {
 		fmt.Fprintf(cli.err, "%s\n", err)
 		return fmt.Errorf("Error: failed to restore container named %s", name)
 	}
-	fmt.Fprintf(cli.out, "%s\n", name)
+
+	var restoreResult engine.Env
+	if err := restoreResult.Decode(stream); err != nil {
+		return err
+	}
+	fmt.Fprintln(cli.out, restoreResult.Get("Id"))
 	return nil
 }
