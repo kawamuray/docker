@@ -825,7 +825,7 @@ func (container *Container) Checkpoint(stop bool) error {
 	return nil
 }
 
-func (container *Container) Restore(checkpointID string) error {
+func (container *Container) Restore(checkpoint *ContainerCheckpoint, clone bool) error {
 	log.Debugf("Restoring %s", container.ID)
 	container.Lock()
 	defer container.Unlock()
@@ -834,17 +834,23 @@ func (container *Container) Restore(checkpointID string) error {
 		return fmt.Errorf("Container %s already running.", container.ID)
 	}
 
-	checkpoint := container.Checkpoints[checkpointID]
-	if checkpoint == nil {
-		return fmt.Errorf("No such checkpoint %s for container %s", checkpointID, container.ID)
-	}
-
 	container.NetworkSettings = checkpoint.NetworkSettings
 
 	runner := func(_ *Container, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
+		if clone {
+			if err := checkpoint.patchImage(); err != nil {
+				log.Errorf("failed to patch: %s", err)
+				return execdriver.ExitStatus{ExitCode: -1}, err
+			}
+			// defer checkpoint.cleanFiles()
+		}
 		return container.daemon.execDriver.Restore(checkpoint.execdriverCheckpoint(), pipes, startCallback)
 	}
-	return container.spawn(runner, container.RestoreNetwork)
+	if clone {
+		return container.spawn(runner, container.AllocateNetwork)
+	} else {
+		return container.spawn(runner, container.RestoreNetwork)
+	}
 }
 
 func (container *Container) Mount() error {

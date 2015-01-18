@@ -1221,7 +1221,12 @@ func postContainersRestore(eng *engine.Engine, version version.Version, w http.R
 	if vars == nil {
 		return fmt.Errorf("Missing parameter")
 	}
+	if err := parseForm(r); err != nil {
+		return err
+	}
+
 	job := eng.Job("restore", vars["name"], vars["checkpointID"])
+	job.SetenvBool("clone", r.Form.Get("clone") == "1")
 	if err := job.Run(); err != nil {
 		return err
 	}
