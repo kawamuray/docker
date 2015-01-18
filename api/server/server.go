@@ -1240,6 +1240,19 @@ func postContainersRestore(eng *engine.Engine, version version.Version, w http.R
 	return writeJSON(w, http.StatusOK, out)
 }
 
+func postContainersLoad(eng *engine.Engine, version version.Version, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+	if err := parseForm(r); err != nil {
+		return err
+	}
+
+	job := eng.Job("container_load", r.Form.Get("id"), r.Form.Get("new_image_id"))
+	if err := job.Run(); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
 func optionsHandler(eng *engine.Engine, version version.Version, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	w.WriteHeader(http.StatusOK)
 	return nil
@@ -1370,6 +1383,8 @@ func createRouter(eng *engine.Engine, logging, enableCors bool, dockerVersion st
 			"/containers/{name:.*}/rename":  postContainerRename,
 			"/containers/{name:.*}/checkpoint": postContainersCheckpoint,
 			"/containers/{name:.*}/restore/{checkpointID:.*}":    postContainersRestore,
+
+			"/containers/load":              postContainersLoad,
 		},
 		"DELETE": {
 			"/containers/{name:.*}": deleteContainers,

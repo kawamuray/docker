@@ -137,6 +137,7 @@ func (daemon *Daemon) Install(eng *engine.Engine) error {
 		"execInspect":       daemon.ContainerExecInspect,
 		"checkpoint":        daemon.ContainerCheckpoint,
 		"restore":           daemon.ContainerRestore,
+		"container_load":    daemon.ContainerLoad,
 	} {
 		if err := eng.Register(name, method); err != nil {
 			return err
@@ -414,6 +415,30 @@ func (daemon *Daemon) restore() error {
 	return nil
 }
 
+func (daemon *Daemon) restoreSingleContainer(id string) error {
+	// FIXME: some logic are duplicating with restore()
+	container, err := daemon.load(id)
+	if err != nil {
+		return  fmt.Errorf("Failed to load container %v: %v", id, err)
+	}
+
+	currentDriver := daemon.driver.String()
+	// Ignore the container if it does not support the current driver being used by the graph
+	if !(container.Driver == "" && currentDriver == "aufs") && container.Driver != currentDriver {
+		return fmt.Errorf("Cannot load container %s because it was created with another graph driver.", id)
+	}
+
+	container.Name, err = daemon.generateNewName(id)
+	if err != nil {
+		log.Debugf("Setting default id - %s", err)
+	}
+	if err := daemon.register(container, false); err != nil {
+		return fmt.Errorf("Failed to register container %s: %s", id, err)
+	}
+	container.registerVolumes()
+	return nil
+}
+
 // set up the watch on the host's /etc/resolv.conf so that we can update container's
 // live resolv.conf when the network changes on the host
 func (daemon *Daemon) setupResolvconfWatcher() error {
@@ -660,7 +685,7 @@ func (daemon *Daemon) newContainer(name string, config *runconfig.Config, imgID 
 func (daemon *Daemon) createRootfs(container *Container) error {
 	// Step 1: create the container directory.
 	// This doubles as a barrier to avoid race conditions.
-	if err := os.Mkdir(container.root, 0700); err != nil {
+	if err := os.MkdirAll(container.root, 0700); err != nil {
 		return err
 	}
 	initID := fmt.Sprintf("%s-init", container.ID)
