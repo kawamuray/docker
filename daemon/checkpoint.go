@@ -20,6 +20,7 @@ type ContainerCheckpoint struct {
 	CreatedAt       time.Time
 
 	container       *Container
+	original        *ContainerCheckpoint // just nil if it's not a cloned one
 }
 
 func (cp *ContainerCheckpoint) imagePath() string {
@@ -45,6 +46,7 @@ func (cp *ContainerCheckpoint) clone(forContainer *Container) (*ContainerCheckpo
 	networkSettings := *cp.NetworkSettings
 	newCheckpoint.NetworkSettings = &networkSettings
 	newCheckpoint.container = forContainer
+	newCheckpoint.original = cp
 
 	newImagePath := newCheckpoint.imagePath()
 	if err := os.MkdirAll(newImagePath, 0775); err != nil {
@@ -87,7 +89,8 @@ func (cp *ContainerCheckpoint) patchImage() error {
 
 	cmd := exec.Command("patch-criu", imagePath, tmpdir,
 		"ip="+cp.container.NetworkSettings.IPAddress,
-		"mac="+strings.Replace(cp.container.NetworkSettings.MacAddress, ":", "", -1))
+		"mac="+strings.Replace(cp.container.NetworkSettings.MacAddress, ":", "", -1),
+		"cgroup="+fmt.Sprintf("docker-%s:docker-%s", cp.original.container.ID, cp.container.ID))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("patch-criu %s: output=%s", err, string(output))

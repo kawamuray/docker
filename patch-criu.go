@@ -156,9 +156,84 @@ func rewriteIPAddress(srcPath, destPath, ip string) error {
 	return replaceWrite(filepath.Join(destPath, "route-8.img"), routeData)
 }
 
+func rewriteCgroupDirEntry(dir *criu_pb.CgroupDirEntry, fromPattern, toPattern string) {
+	*dir.DirName = strings.Replace(*dir.DirName, fromPattern, toPattern, -1)
+	for _, child := range dir.Children {
+		rewriteCgroupDirEntry(child, fromPattern, toPattern)
+	}
+}
+
+func rewriteCgroupPaths(srcPath, destPath, fromPattern, toPattern string) error {
+	srcFp, err := os.Open(filepath.Join(srcPath, "cgroup.img"))
+	if err != nil {
+		return err
+	}
+	defer srcFp.Close()
+
+	destFilePath := filepath.Join(destPath, "cgroup.img")
+	os.Remove(destFilePath)
+	destFp, err := os.OpenFile(destFilePath, os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer destFp.Close()
+
+	// Copy magic header first
+	if _, err := io.CopyN(destFp, srcFp, 4); err != nil {
+		return err
+	}
+
+	for {
+		var (
+			size uint32
+			cgroupEntry criu_pb.CgroupEntry
+		)
+		if err := binary.Read(srcFp, native, &size); err != nil {
+			if err == io.EOF {
+				break
+			} else {
+				return err
+			}
+		}
+
+		buf := make([]byte, size)
+		if _, err := io.ReadFull(srcFp, buf); err != nil {
+			return err
+		}
+		if err := proto.Unmarshal(buf, &cgroupEntry); err != nil {
+			return err
+		}
+
+		for _, set := range cgroupEntry.Sets {
+			for _, ctl := range set.Ctls {
+				*ctl.Path = strings.Replace(*ctl.Path, fromPattern, toPattern, -1)
+			}
+		}
+		for _, controller := range cgroupEntry.Controllers {
+			for _, dir := range controller.Dirs {
+				rewriteCgroupDirEntry(dir, fromPattern, toPattern)
+			}
+		}
+
+		data, err := proto.Marshal(&cgroupEntry)
+		if err != nil {
+			return err
+		}
+
+		size = uint32(len(data))
+		if err := binary.Write(destFp, native, &size); err != nil {
+			return err
+		}
+		if _, err := destFp.Write(data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: %s SRC_DIR DEST_DIR ip=NEW_IPADDR mac=NEW_MACADDR\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s SRC_DIR DEST_DIR ip=NEW_IPADDR mac=NEW_MACADDR cgroup=OLD_CGROUP_PATTERN:NEW_CGROUP_PATTERN\n", os.Args[0])
 		os.Exit(1)
 	}
 
@@ -172,6 +247,13 @@ func main() {
 			err = rewriteIPAddress(srcPath, destPath, kv[1])
 		case "mac":
 			err = rewriteMacAddress(srcPath, destPath, kv[1])
+		case "cgroup":
+			oldAndNew := strings.SplitN(kv[1], ":", 2)
+			if len(oldAndNew) < 2 {
+				err = fmt.Errorf("invalid cgroup= parameter")
+			} else {
+				err = rewriteCgroupPaths(srcPath, destPath, oldAndNew[0], oldAndNew[1])
+			}
 		default:
 			err = fmt.Errorf("unkown key: %s", kv[0])
 		}
