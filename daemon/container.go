@@ -793,6 +793,21 @@ func (container *Container) Export() (archive.Archive, error) {
 		nil
 }
 
+func (container *Container) commitForCheckpoint(stop bool) (*image.Image, error) {
+	config := *container.Config
+	if !stop {
+		if err := container.Pause(); err != nil {
+			return nil, fmt.Errorf("failed to pause %s: %s", container.ID, err)
+		}
+		defer func() {
+			if err := container.Unpause(); err != nil {
+				log.Errorf("failed to unpause %s: %s", container.ID, err)
+			}
+		}()
+	}
+	return container.daemon.Commit(container, "", "", "", "", false, &config)
+}
+
 func (container *Container) Checkpoint(stop bool) error {
 	log.Debugf("Checkpointing %s", container.ID)
 	container.Lock()
@@ -818,10 +833,15 @@ func (container *Container) Checkpoint(stop bool) error {
 	if err := container.daemon.Checkpoint(checkpoint, stop); err != nil {
 		return err
 	}
-
 	log.Debugf("checkpoint = %s", checkpoint)
-	container.Checkpoints[checkpoint.ID] = checkpoint
 
+	img, err := container.commitForCheckpoint(stop)
+	if err != nil {
+		return err
+	}
+	checkpoint.ImageID = img.ID
+
+	container.Checkpoints[checkpoint.ID] = checkpoint
 	return nil
 }
 
@@ -840,7 +860,6 @@ func (container *Container) Restore(checkpoint *ContainerCheckpoint, clone bool)
 				log.Errorf("failed to patch: %s", err)
 				return execdriver.ExitStatus{ExitCode: -1}, err
 			}
-			// defer checkpoint.cleanFiles()
 		}
 		return container.daemon.execDriver.Restore(checkpoint.execdriverCheckpoint(), pipes, startCallback)
 	}

@@ -15,7 +15,7 @@ import (
 
 type ContainerCheckpoint struct {
 	ID              string
-
+	ImageID         string
 	NetworkSettings *NetworkSettings
 	CreatedAt       time.Time
 
@@ -130,11 +130,12 @@ func (daemon *Daemon) ContainerCheckpoint(job *engine.Job) engine.Status {
 	return engine.StatusOK
 }
 
-func (daemon *Daemon) cloneContainer(container *Container) (*Container, error) {
+func (daemon *Daemon) cloneContainer(container *Container, imgID string) (*Container, error) {
 	container.Lock()
 	defer container.Unlock()
 
 	configCopy := *container.Config
+	configCopy.Image = imgID
 	configCopy.MacAddress = ""
 
 	hostConfigCopy := *container.hostConfig
@@ -162,25 +163,23 @@ func (daemon *Daemon) ContainerRestore(job *engine.Job) engine.Status {
 		return job.Errorf("No such checkpoint %s for container %s", checkpointID, container.ID)
 	}
 
-	clone := job.GetenvBool("clone")
-	if clone {
-		cloned, err := daemon.cloneContainer(container)
-		if err != nil {
-			return job.Errorf("%s", err)
-		}
-		container = cloned
-		log.Infof("cloned container ID=%s", container.ID)
-		checkpoint, err = checkpoint.clone(container)
-		if err != nil {
-			return job.Errorf("%s", err)
-		}
+	containerClone, err := daemon.cloneContainer(container, checkpoint.ImageID)
+	if err != nil {
+		return job.Error(err)
+	}
+	log.Infof("cloned container ID=%s", containerClone.ID)
+
+	checkpoint, err = checkpoint.clone(containerClone)
+	// defer checkpoint.cleanFiles()
+	if err != nil {
+		return job.Error(err)
 	}
 
-	if err := container.Restore(checkpoint, clone); err != nil {
+	if err := containerClone.Restore(checkpoint, job.GetenvBool("clone")); err != nil {
 		return job.Errorf("Cannot restore container %s: %s", name, err)
 	}
-	container.LogEvent("restore")
-	job.Printf("%s\n", container.ID)
+	containerClone.LogEvent("restore")
+	job.Printf("%s\n", containerClone.ID)
 
 	return engine.StatusOK
 }
