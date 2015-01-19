@@ -834,8 +834,6 @@ func (container *Container) Restore(checkpoint *ContainerCheckpoint, clone bool)
 		return fmt.Errorf("Container %s already running.", container.ID)
 	}
 
-	container.NetworkSettings = checkpoint.NetworkSettings
-
 	runner := func(_ *Container, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
 		if clone {
 			if err := checkpoint.patchImage(); err != nil {
@@ -849,6 +847,7 @@ func (container *Container) Restore(checkpoint *ContainerCheckpoint, clone bool)
 	if clone {
 		return container.spawn(runner, container.AllocateNetwork)
 	} else {
+		container.NetworkSettings = checkpoint.NetworkSettings
 		return container.spawn(runner, container.RestoreNetwork)
 	}
 }
