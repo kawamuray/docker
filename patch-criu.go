@@ -82,6 +82,8 @@ func rewriteMacAddress(srcPath, destPath, mac string) error {
 		if err != nil {
 			return err
 		}
+
+		size = uint32(len(data))
 		if err := binary.Write(destFp, native, &size); err != nil {
 			return err
 		}
