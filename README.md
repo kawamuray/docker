@@ -1,3 +1,14 @@
+How to build for CR support
+===========================
+- Install criu
+
+```sh
+go get -u github.com/golang/protobuf/{proto,protoc-gen-go}
+go build patch-criu.go
+sudo cp patch-criu /usr/local/bin
+make
+```
+
 Docker: the Linux container engine
 ==================================
 
