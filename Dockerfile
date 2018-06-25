@@ -52,11 +52,10 @@ RUN apt-get update && apt-get install -y \
 	--no-install-recommends
 
 # Get lvm2 source for compiling statically
-RUN git clone -b v2_02_103 https://git.fedorahosted.org/git/lvm2.git /usr/local/lvm2
 # see https://git.fedorahosted.org/cgit/lvm2.git/refs/tags for release tags
-
 # Compile and install lvm2
-RUN cd /usr/local/lvm2 \
+RUN git clone -b v2_02_103 https://git.fedorahosted.org/git/lvm2.git /usr/local/lvm2 && \
+	cd /usr/local/lvm2 \
 	&& ./configure --enable-static_link \
 	&& make device-mapper \
 	&& make install_device-mapper
@@ -65,8 +64,8 @@ RUN cd /usr/local/lvm2 \
 # Install lxc
 ENV LXC_VERSION 1.0.7
 RUN mkdir -p /usr/src/lxc \
-	&& curl -sSL https://linuxcontainers.org/downloads/lxc/lxc-${LXC_VERSION}.tar.gz | tar -v -C /usr/src/lxc/ -xz --strip-components=1
-RUN cd /usr/src/lxc \
+	&& curl -sSL https://linuxcontainers.org/downloads/lxc/lxc-${LXC_VERSION}.tar.gz | tar -v -C /usr/src/lxc/ -xz --strip-components=1 && \
+	cd /usr/src/lxc \
 	&& ./configure \
 	&& make \
 	&& make install \
@@ -105,16 +104,13 @@ ENV GOFMT_VERSION 1.3.3
 RUN curl -sSL https://storage.googleapis.com/golang/go${GOFMT_VERSION}.$(go env GOOS)-$(go env GOARCH).tar.gz | tar -C /go/bin -xz --strip-components=2 go/bin/gofmt
 
 # Grab Go's cover tool for dead-simple code coverage testing
-RUN go get golang.org/x/tools/cmd/cover
-
 # TODO replace FPM with some very minimal debhelper stuff
-RUN gem install --no-rdoc --no-ri fpm --version 1.3.2
-
 # Get the "busybox" image source so we can build locally instead of pulling
-RUN git clone -b buildroot-2014.02 https://github.com/jpetazzo/docker-busybox.git /docker-busybox
-
 # Get the "cirros" image source so we can import it instead of fetching it during tests
-RUN curl -sSL -o /cirros.tar.gz https://github.com/ewindisch/docker-cirros/raw/1cded459668e8b9dbf4ef976c94c05add9bbd8e9/cirros-0.3.0-x86_64-lxc.tar.gz
+RUN go get golang.org/x/tools/cmd/cover && \
+	gem install --no-rdoc --no-ri fpm --version 1.3.2 && \
+	git clone -b buildroot-2014.02 https://github.com/jpetazzo/docker-busybox.git /docker-busybox && \
+	curl -sSL -o /cirros.tar.gz https://github.com/ewindisch/docker-cirros/raw/1cded459668e8b9dbf4ef976c94c05add9bbd8e9/cirros-0.3.0-x86_64-lxc.tar.gz
 
 # Get the "docker-py" source so we can run their integration tests
 ENV DOCKER_PY_COMMIT aa19d7b6609c6676e8258f6b900dea2eda1dbe95
@@ -130,11 +126,10 @@ RUN { \
 	} > ~/.s3cfg
 
 # Set user.email so crosbymichael's in-container merge commits go smoothly
-RUN git config --global user.email 'docker-dummy@example.com'
-
 # Add an unprivileged user to be used for tests which need it
-RUN groupadd -r docker
-RUN useradd --create-home --gid docker unprivilegeduser
+RUN git config --global user.email 'docker-dummy@example.com' && \
+	groupadd -r docker && \
+	useradd --create-home --gid docker unprivilegeduser
 
 VOLUME /var/lib/docker
 WORKDIR /go/src/github.com/docker/docker
